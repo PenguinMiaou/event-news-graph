@@ -389,14 +389,13 @@
 
 .node {
   cursor: pointer;
-  transition: all 0.3s ease;
 }
 
 .node circle {
   fill: var(--bg-color);
   stroke: var(--border-color);
   stroke-width: 2px;
-  transition: all 0.3s ease;
+  transition: fill 0.3s ease, stroke 0.3s ease, filter 0.3s ease;
 }
 
 .node text {

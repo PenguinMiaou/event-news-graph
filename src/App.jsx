@@ -38,8 +38,12 @@ function GraphController({ settings, actView, setActView, forkedNodes, setForked
   }, [topicName, forkId]);
 
   const handleNodeClick = (node) => {
-    setSelectedNode(node);
-    if (node) setIsPanelOpen(true);
+    if (node) {
+      setSelectedNode(node);
+      setIsPanelOpen(true);
+    } else {
+      closePanel();
+    }
   };
 
   const closePanel = () => {

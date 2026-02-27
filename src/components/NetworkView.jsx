@@ -10,113 +10,168 @@ export default function NetworkView({ data, selectedNode, onNodeClick }) {
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
     useEffect(() => {
-        // Set initial positions based on a circle
+        // Initial layout: randomly scatter in a loose circle so physics can sort it out
         const width = typeof window !== 'undefined' ? window.innerWidth - 260 : 800;
         const height = typeof window !== 'undefined' ? window.innerHeight : 600;
 
         const positionedNodes = data.nodes.map((n, i) => {
             const angle = (i / data.nodes.length) * Math.PI * 2;
-            const radius = 180 + (i % 2) * 60;
+            const radius = 100 + Math.random() * 200;
             return {
                 ...n,
-                x: width / 2 + Math.cos(angle) * radius,
-                y: height / 2 + Math.sin(angle) * radius,
+                x: width / 2 + Math.cos(angle) * Math.max(100, radius),
+                y: height / 2 + Math.sin(angle) * Math.max(100, radius),
                 vx: 0,
-                vy: 0,
-                targetX: width / 2 + Math.cos(angle) * radius,
-                targetY: height / 2 + Math.sin(angle) * radius
+                vy: 0
             };
         });
-
-        if (positionedNodes[0]) {
-            positionedNodes[0].targetX = width / 2;
-            positionedNodes[0].targetY = height / 2;
-        }
 
         setNodes(positionedNodes);
 
     }, [data]);
 
-    // Physics Engine for Hover Repulsion
+    // Physics Engine for Force-Directed Layout & Hover Interaction
     const mousePos = useRef({ x: -1000, y: -1000 });
     const animationRef = useRef();
 
     useEffect(() => {
+        const width = typeof window !== 'undefined' ? window.innerWidth - 260 : 800;
+        const height = typeof window !== 'undefined' ? window.innerHeight : 600;
+        const centerX = width / 2;
+        const centerY = height / 2;
+
+        let frameCount = 0;
+
         const simulate = () => {
+            frameCount++;
+            const simulationSteps = frameCount < 30 ? 6 : 1;
+
             setNodes(currentNodes => {
                 let updated = false;
                 const mx = mousePos.current.x;
                 const my = mousePos.current.y;
 
-                // 1. Identify hovered node (closest within 100px threshold)
-                let closestNodeId = null;
-                let minDist = 100;
-                if (mx !== -1000) {
-                    currentNodes.forEach(n => {
-                        const dist = Math.sqrt((n.x - mx) ** 2 + (n.y - my) ** 2);
-                        if (dist < minDist) {
-                            minDist = dist;
-                            closestNodeId = n.id;
+                // Work with a mutable copy of nodes
+                let nextNodes = currentNodes.map(n => ({ ...n }));
+
+                for (let step = 0; step < simulationSteps; step++) {
+                    updated = false; // Reset per step, keep if final step moved
+
+                    // 1. Identify hovered node
+                    let closestNodeId = null;
+                    let minDist = 100;
+                    if (mx !== -1000) {
+                        nextNodes.forEach(n => {
+                            const dist = Math.sqrt((n.x - mx) ** 2 + (n.y - my) ** 2);
+                            if (dist < minDist) {
+                                minDist = dist;
+                                closestNodeId = n.id;
+                            }
+                        });
+                    }
+
+                    // 2. Link Attraction (Spring Force)
+                    data.links.forEach(link => {
+                        const source = nextNodes.find(n => n.id === link.source);
+                        const target = nextNodes.find(n => n.id === link.target);
+                        if (source && target) {
+                            const dx = target.x - source.x;
+                            const dy = target.y - source.y;
+                            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                            // Target distance between connected nodes
+                            const targetDist = 180;
+                            const force = (dist - targetDist) * 0.03; // Spring stiffness
+
+                            const fx = (dx / dist) * force;
+                            const fy = (dy / dist) * force;
+
+                            source.vx += fx;
+                            source.vy += fy;
+                            target.vx -= fx;
+                            target.vy -= fy;
+
+                            // Top-Down Hierarchical Flow Bias: Target should be visually lower than Source
+                            const verticalBias = 0.5;
+                            source.vy -= verticalBias;
+                            target.vy += verticalBias;
                         }
                     });
-                }
 
-                const newNodes = currentNodes.map(node => {
-                    let { x, y, vx, vy, targetX, targetY, id } = node;
+                    // 3. Node Repulsion (Charge) & Gravity
+                    for (let i = 0; i < nextNodes.length; i++) {
+                        const node = nextNodes[i];
+                        node.isHovered = node.id === closestNodeId;
 
-                    // Spring force towards target (home) position
-                    const dx = targetX - x;
-                    const dy = targetY - y;
-                    vx += dx * 0.05; // Spring stiffness
-                    vy += dy * 0.05;
+                        // Repel every other node
+                        for (let j = i + 1; j < nextNodes.length; j++) {
+                            const other = nextNodes[j];
+                            const dx = other.x - node.x;
+                            const dy = other.y - node.y;
+                            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
 
-                    const distToMouse = Math.sqrt((x - mx) ** 2 + (y - my) ** 2);
+                            if (dist < 400) {
+                                // Inverse square law repulsion
+                                const force = 800 / (dist * dist);
+                                const fx = (dx / dist) * force;
+                                const fy = (dy / dist) * force;
 
-                    if (id === closestNodeId) {
-                        // The user is hovering over this node (or it's the closest)
-                        // Snap/pull strongly to the mouse pointer so it's perfectly clickable
-                        vx += (mx - x) * 0.2;
-                        vy += (my - y) * 0.2;
+                                node.vx -= fx;
+                                node.vy -= fy;
+                                other.vx += fx;
+                                other.vy += fy;
+                            }
+                        }
 
-                        // Extremely heavy damping so it stops moving and locks in place
-                        vx *= 0.3;
-                        vy *= 0.3;
-                    } else if (selectedNode && id === selectedNode.id) {
-                        // The node is selected and the detail panel is open
-                        // Pin it firmly in place so it doesn't float away
-                        vx *= 0.1;
-                        vy *= 0.1;
-                    } else if (distToMouse < 200) {
-                        // Create a larger clearing to prevent clutter
-                        const force = (200 - distToMouse) * 0.04;
-                        vx += ((x - mx) / distToMouse) * force;
-                        vy += ((y - my) / distToMouse) * force;
+                        // Gravity (gently pull entire graph toward center)
+                        const gdx = centerX - node.x;
+                        const gdy = centerY - node.y;
+                        node.vx += gdx * 0.003;
+                        node.vy += gdy * 0.003;
+
+                        // Mouse Interaction
+                        const distToMouse = Math.sqrt((node.x - mx) ** 2 + (node.y - my) ** 2);
+                        if (node.id === closestNodeId) {
+                            // Snap hovered node strongly to cursor
+                            node.vx += (mx - node.x) * 0.2;
+                            node.vy += (my - node.y) * 0.2;
+                            node.vx *= 0.3;
+                            node.vy *= 0.3;
+                        } else if (selectedNode && node.id === selectedNode.id) {
+                            // Pin selected node in place
+                            node.vx *= 0.1;
+                            node.vy *= 0.1;
+                        } else if (distToMouse < 200 && mx !== -1000) {
+                            // Push other nodes away from the cursor bubble
+                            const force = (200 - distToMouse) * 0.02;
+                            node.vx += ((node.x - mx) / distToMouse) * force;
+                            node.vy += ((node.y - my) / distToMouse) * force;
+                        }
+
+                        // Global Damping / Friction
+                        if (node.id !== closestNodeId && !(selectedNode && node.id === selectedNode.id)) {
+                            node.vx *= 0.75;
+                            node.vy *= 0.75;
+                        }
+
+                        node.x += node.vx;
+                        node.y += node.vy;
+
+                        if (Math.abs(node.vx) > 0.05 || Math.abs(node.vy) > 0.05) {
+                            updated = true;
+                        }
                     }
+                } // End of fast-forward steps loop
 
-                    // Normal Damping (Friction) for non-locked nodes
-                    if (id !== closestNodeId && !(selectedNode && id === selectedNode.id)) {
-                        vx *= 0.8;
-                        vy *= 0.8;
-                    }
-
-                    x += vx;
-                    y += vy;
-
-                    if (Math.abs(vx) > 0.1 || Math.abs(vy) > 0.1 || Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-                        updated = true;
-                    }
-
-                    return { ...node, x, y, vx, vy, isHovered: id === closestNodeId };
-                });
-
-                return updated ? newNodes : currentNodes;
+                return updated ? nextNodes : currentNodes;
             });
             animationRef.current = requestAnimationFrame(simulate);
         };
 
+        // Start loop
         animationRef.current = requestAnimationFrame(simulate);
         return () => cancelAnimationFrame(animationRef.current);
-    }, []);
+    }, [data.links, selectedNode]);
 
     const handleMouseDown = (e) => {
         setIsDragging(true);
@@ -188,6 +243,14 @@ export default function NetworkView({ data, selectedNode, onNodeClick }) {
             <div className="controls-hint">Drag to pan, click nodes to interact</div>
 
             <svg className="network-svg">
+                <defs>
+                    <marker id="arrowhead" viewBox="0 0 10 10" refX="24" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-muted)" opacity="0.6" />
+                    </marker>
+                    <marker id="arrowhead-highlighted" viewBox="0 0 10 10" refX="24" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent-color)" />
+                    </marker>
+                </defs>
                 <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}>
                     {/* Render links dynamically to avoid state lag */}
                     {data.links.map((link, i) => {
@@ -209,14 +272,24 @@ export default function NetworkView({ data, selectedNode, onNodeClick }) {
                                     y1={sourceNode.y}
                                     x2={targetNode.x}
                                     y2={targetNode.y}
+                                    markerEnd={`url(#${isHighlighted ? 'arrowhead-highlighted' : 'arrowhead'})`}
+                                />
+                                <rect
+                                    x={midX - (link.label.length * 3.5)}
+                                    y={midY - 8}
+                                    width={link.label.length * 7}
+                                    height={16}
+                                    fill="var(--panel-bg)"
+                                    rx="4"
+                                    style={{ opacity: isHighlighted ? 0.9 : 0.6, transition: 'opacity 0.3s' }}
                                 />
                                 <text
                                     x={midX}
-                                    y={midY}
-                                    fill="var(--text-muted)"
+                                    y={midY + 3}
+                                    fill={isHighlighted ? "var(--accent-color)" : "var(--text-muted)"}
                                     fontSize="10"
                                     textAnchor="middle"
-                                    style={{ opacity: isHighlighted ? 1 : 0.4, transition: 'opacity 0.3s' }}
+                                    style={{ opacity: isHighlighted ? 1 : 0.6, transition: 'opacity 0.3s', fontWeight: isHighlighted ? 600 : 'normal' }}
                                 >
                                     {link.label}
                                 </text>
