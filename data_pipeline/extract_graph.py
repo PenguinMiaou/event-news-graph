@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 from fetch_news import fetch_google_news
 from dotenv import load_dotenv
+import time
 
 # Load environment variables from .env
 load_dotenv()
@@ -39,7 +40,7 @@ OUTPUT SCHEMA (The exact structure you MUST follow):
       "summary": "Detailed summary explaining what this node means and why it's important.",
       "date": "YYYY-MM-DD",
       "sources": [
-        { "name": "Source Name from the article", "slant": "neutral|left-leaning|right-leaning", "excerpt": "Relevant quote from the article" }
+        { "name": "Source Name from the article", "url": "URL of the article", "slant": "neutral|left-leaning|right-leaning", "excerpt": "Relevant quote from the article" }
       ],
       "branchId": "b1"
     }
@@ -60,7 +61,7 @@ def get_depth_instructions(depth):
         return "Level 3 (Deep Chain): Extract the core event, direct sub-events, and long-tail grandchild effects. Max 12-18 nodes. Build a comprehensive 3-tier web of causes and impacts."
 
 
-def extract_graph_from_articles(articles, topic, api_key=None, depth=3):
+def extract_graph_from_articles(articles, topic, api_key=None, depth=3, base_url=None):
     print(f"Initiating graph extraction via Gemini (Depth: {depth})...")
     
     if not api_key:
@@ -70,27 +71,39 @@ def extract_graph_from_articles(articles, topic, api_key=None, depth=3):
     if not api_key:
         raise ValueError("No Gemini API key provided. Please set it in the Settings panel.")
         
-    client = genai.Client(api_key=api_key)
+    if base_url:
+        client = genai.Client(api_key=api_key, http_options={'base_url': base_url})
+    else:
+        client = genai.Client(api_key=api_key)
     
     # Format articles into a readable string
     input_text = f"TOPIC: {topic}\n\nARTICLES:\n"
     for i, article in enumerate(articles):
-        input_text += f"---\n Article {i+1} Title: {article['title']}\n Source: {article['source']}\n Date: {article['published']}\n"
+        input_text += f"---\n Article {i+1} Title: {article['title']}\n Source: {article['source']}\n Date: {article['published']}\n Link: {article.get('link', '')}\n"
     
     print("Prompting LLM...")
     
     dynamic_prompt = SYSTEM_PROMPT + "\nInstructions for nodes & links:\n- " + get_depth_instructions(depth)
     
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=input_text,
-        config=types.GenerateContentConfig(
-            system_instruction=dynamic_prompt,
-            temperature=0.2, # Low temp for structured outputs
-        )
-    )
-    
-    return response.text
+    # Retry logic for intermittent network drops (e.g. "Server disconnected without sending a response")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=input_text,
+                config=types.GenerateContentConfig(
+                    system_instruction=dynamic_prompt,
+                    temperature=0.2, # Low temp for structured outputs
+                )
+            )
+            return response.text
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"API Error ({e}), retrying {attempt + 1}/{max_retries}...")
+                time.sleep(2)
+            else:
+                raise e
 
 if __name__ == "__main__":
     topic = "SpaceX Mars"

@@ -34,7 +34,15 @@ export default function NodeDetailPanel({ node, isOpen, onClose, onFork }) {
                                         key={i}
                                         className={`diff-column ${src.slant === 'pro-merc' ? 'left-leaning' : src.slant === 'neutral' ? '' : 'right-leaning'}`}
                                     >
-                                        <div className="diff-source">{src.name} <ExternalLink size={12} style={{ display: 'inline', opacity: 0.5 }} /></div>
+                                        <div className="diff-source">
+                                            {src.url && src.url !== "URL of the article" ? (
+                                                <a href={src.url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>
+                                                    {src.name} <ExternalLink size={12} style={{ display: 'inline', opacity: 0.5 }} />
+                                                </a>
+                                            ) : (
+                                                <>{src.name} <ExternalLink size={12} style={{ display: 'inline', opacity: 0.5 }} /></>
+                                            )}
+                                        </div>
                                         <div className="diff-text">"{src.excerpt}"</div>
                                     </div>
                                 ))}

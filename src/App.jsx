@@ -54,15 +54,6 @@ function GraphController({ settings, actView, setActView, forkedNodes, setForked
     const existing = savedTopics.find(t => t.topic.toLowerCase() === query.toLowerCase());
     if (existing && existing.data) {
       setGraphData(existing.data);
-      // Update timestamp to bubble to top (if not pinned)
-      setSavedTopics(prev => {
-        const sorted = [...prev];
-        const idx = sorted.findIndex(t => t.topic.toLowerCase() === query.toLowerCase());
-        if (idx !== -1) {
-          sorted[idx] = { ...sorted[idx], timestamp: Date.now() };
-        }
-        return sorted;
-      });
       return;
     }
 
@@ -75,7 +66,7 @@ function GraphController({ settings, actView, setActView, forkedNodes, setForked
     setIsLoading(true);
     closePanel();
     try {
-      const url = `http://127.0.0.1:5000/api/search?q=${encodeURIComponent(query)}&depth=${settings.depth}&key=${encodeURIComponent(settings.apiKey)}`;
+      const url = `http://127.0.0.1:5000/api/search?q=${encodeURIComponent(query)}&depth=${settings.depth}&lang=${settings.language}&timeRange=${settings.timeRange || ''}&key=${encodeURIComponent(settings.apiKey)}&baseUrl=${encodeURIComponent(settings.baseUrl || '')}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -123,11 +114,27 @@ function GraphController({ settings, actView, setActView, forkedNodes, setForked
   };
 
   const handleFork = (nodeTitle) => {
-    if (!forkedNodes.includes(nodeTitle)) {
-      setForkedNodes([...forkedNodes, nodeTitle]);
-    }
+    setForkedNodes(prev => {
+      if (!prev.find(f => f.title === nodeTitle)) {
+        return [...prev, { title: nodeTitle, isPinned: false, timestamp: Date.now() }];
+      }
+      return prev;
+    });
     closePanel();
     navigate(`/fork/${encodeURIComponent(nodeTitle)}`);
+  };
+
+  const handleDeleteFork = (e, forkTitle) => {
+    e.stopPropagation();
+    setForkedNodes(prev => prev.filter(f => f.title !== forkTitle));
+    if (forkId === forkTitle) {
+      navigate('/');
+    }
+  };
+
+  const handleToggleForkPin = (e, forkTitle) => {
+    e.stopPropagation();
+    setForkedNodes(prev => prev.map(f => f.title === forkTitle ? { ...f, isPinned: !f.isPinned } : f));
   };
 
   return (
@@ -142,10 +149,14 @@ function GraphController({ settings, actView, setActView, forkedNodes, setForked
         onOpenSettings={() => setIsSettingsOpen(true)}
         onDeleteTopic={handleDeleteTopic}
         onTogglePin={handleTogglePin}
+        onDeleteFork={handleDeleteFork}
+        onToggleForkPin={handleToggleForkPin}
+        currentTopicName={topicName}
+        currentForkId={forkId}
       />
 
       <main className="main-content">
-        {isLoading ? (
+        {!graphData && isLoading ? (
           <div className="loading-overlay">
             <div className="scanner"></div>
             <p>Scanning global news sources & extracting Knowledge Graph...</p>
@@ -182,19 +193,38 @@ function GraphController({ settings, actView, setActView, forkedNodes, setForked
 
 function App() {
   const [actView, setActView] = useState('network');
-  const [forkedNodes, setForkedNodes] = useState([]);
+  const [forkedNodes, setForkedNodes] = useState(() => {
+    const saved = localStorage.getItem('eventNewsForks');
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      return parsed.map(f => typeof f === 'string' ? { title: f, isPinned: false, timestamp: Date.now() } : f);
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('eventNewsForks', JSON.stringify(forkedNodes));
+  }, [forkedNodes]);
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState({
     apiKey: localStorage.getItem('geminiApiKey') || '',
-    depth: parseInt(localStorage.getItem('geminiDepth') || '3', 10)
+    depth: parseInt(localStorage.getItem('geminiDepth') || '3', 10),
+    language: localStorage.getItem('geminiLanguage') || 'en',
+    baseUrl: localStorage.getItem('geminiBaseUrl') || '',
+    timeRange: localStorage.getItem('geminiTimeRange') || ''
   });
 
   const handleSaveSettings = (newSettings) => {
     setSettings(newSettings);
     localStorage.setItem('geminiApiKey', newSettings.apiKey);
     localStorage.setItem('geminiDepth', newSettings.depth);
+    localStorage.setItem('geminiLanguage', newSettings.language || 'en');
+    localStorage.setItem('geminiBaseUrl', newSettings.baseUrl || '');
+    localStorage.setItem('geminiTimeRange', newSettings.timeRange || '');
   };
 
   return (
